@@ -6,6 +6,10 @@
 - Location: NTH 220 & NTH 414
 - Instructor: Yunmin Go
 
+### Lab Material
+- Raspberry Pi 4
+- Raspberry Pi OS (Raspbian)
+
 ### Lab Description
 - Lab03: Raw Socket [[pdf]](https://github.com/NarinHan/IoTLab/files/14918710/Iotlab_Lab_03.pdf)
 
