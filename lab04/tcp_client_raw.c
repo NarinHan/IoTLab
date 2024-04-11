@@ -33,10 +33,11 @@ typedef struct pseudo_header {
 
 // Checksum needs to be accurately calculated, otherwise server may drop the packet
 // TODO: Define checksum function which returns unsigned short value 
-unsigned short checksum(const char *data, size_t len)
+unsigned short checksum(const void *data, size_t len)
 {
 	unsigned long sum = 0 ;
 	unsigned short *buf = data ;
+	printf("len : %u\n", len) ;
 
 	// Sum all the 16-bit words
 	while (len > 1) {
@@ -57,18 +58,18 @@ unsigned short checksum(const char *data, size_t len)
 	return (unsigned short)~sum ;	
 }
 
-void create_IP_header(struct iphdr *iph, int pkt_type, struct sockaddr_in *src, struct sockaddr_in *dst) 
+void create_IP_header(struct iphdr *iph, int pkt_type, size_t data_len, struct sockaddr_in *src, struct sockaddr_in *dst) 
 {
 	iph->version = 4 ;
 	iph->ihl = 5 ;
 	iph->tos = 0 ;
-	iph->tot_len = sizeof(struct iphdr) ;
+	iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct tcphdr) + data_len) ;
 	if (pkt_type == SYN) {
-		iph->id = htonl(rand() % 65535) ; 
+		iph->id = htons(rand() % 65535) ; 
 	} else {
-		iph->id += 1 ;
+		iph->id = htons(iph->id + 1) ;
 	}
-	iph->frag_off = 1 << 14 ; // Don't Fragment mode = Bit1 ON
+	iph->frag_off = htons(1 << 14) ; // Don't Fragment mode = Bit1 ON
 	iph->ttl = 128 ; // any good number [64, 128]
 	iph->protocol = IPPROTO_TCP ;
 	iph->saddr = src->sin_addr.s_addr ;
@@ -104,8 +105,29 @@ void create_TCP_header(struct tcphdr *tcph, int pkt_type, struct sockaddr_in *sr
 	tcph->rst = 0 ;
 	tcph->fin = 0 ;
 	tcph->window = htons(16384) ;
-	tcph->check = 0 ;
+	tcph->check = 0 ; // for now, it will be calculated later
 	tcph->urg_ptr = 0 ;	
+}
+
+// This function will create pseudo segment, calculate checksum of tcp/ip, and create packets
+void create_packet(char *pseudo_seg, char *packet, struct iphdr *iph, struct tcphdr *tcph, pseudo_header_t *ph, char *data, size_t data_len) 
+{
+	// Fill tcp pseudo segment
+	ph->length = htons(sizeof(struct tcphdr) + data_len) ;
+	memcpy(pseudo_seg, ph, sizeof(pseudo_header_t)) ;
+	memcpy(pseudo_seg + sizeof(pseudo_header_t), tcph, sizeof(struct tcphdr)) ;
+	memcpy(pseudo_seg + sizeof(pseudo_header_t) + sizeof(struct tcphdr), data, data_len) ;
+	
+	// Calculate checksum for tcp and ip
+	tcph->check = checksum(pseudo_seg, sizeof(pseudo_header_t) + sizeof(struct tcphdr) + data_len) ;
+	iph->check = checksum(iph, sizeof(struct iphdr)) ;
+	printf("tcp checksum : 0x%04X\n", ntohs(tcph->check)) ;
+	printf("ip checksum : 0x%04X\n", ntohs(iph->check)) ;
+	
+	// Fill packet
+	memcpy(packet, iph, sizeof(struct iphdr)) ;
+	memcpy(packet + sizeof(struct iphdr), tcph, sizeof(struct tcphdr)) ;
+	memcpy(packet + sizeof(struct iphdr) + sizeof(struct tcphdr), data, data_len) ;
 }
 
 int main(int argc, char *argv[])
@@ -155,11 +177,11 @@ int main(int argc, char *argv[])
 	}
 
 	// Set pseudo header
-	pseudo_header_t phdr ;
-	phdr.src_addr = saddr.sin_addr.s_addr ;
-	phdr.dest_addr = daddr.sin_addr.s_addr ;
-	phdr.reserved = 0 ;
-	phdr.proto = IPPROTO_TCP ;
+	pseudo_header_t ph ;
+	ph.src_addr = saddr.sin_addr.s_addr ;
+	ph.dest_addr = daddr.sin_addr.s_addr ;
+	ph.reserved = 0 ;
+	ph.proto = IPPROTO_TCP ;
 
 	// IP header, TCP header, sequence number, ack number
 	struct iphdr iph ;
@@ -167,52 +189,45 @@ int main(int argc, char *argv[])
 	uint32_t seqn = 0 ; 
 	uint32_t ackn = 0 ;
 
+	// Pseudo segment, packet
+	char *pseudo_seg ;
+	char *packet ;
+
 	// TCP Three-way Handshaking 
 	// Step 1. Send SYN (no need to use TCP options)
-	create_IP_header(&iph, SYN, &saddr, &daddr) ;
+	create_IP_header(&iph, SYN, 0, &saddr, &daddr) ;
 	create_TCP_header(&tcph, SYN, &saddr, &daddr, &seqn, &ackn) ;
-	printf("seqn : %d     ackn : %d\n", ntohl(seqn), ntohl(ackn)) ;
+	printf("seqn : %u     ackn : %u\n", seqn, ackn) ;
 
-	// Create and fill tcp pseudo segment
-	char *pseudo_seg = malloc(sizeof(pseudo_header_t) + sizeof(struct tcphdr)) ; // treat contents of TCP segment including pseudo header as sequence of 16-bit integers
+	pseudo_seg = malloc(sizeof(pseudo_header_t) + sizeof(struct tcphdr)) ; // treat contents of TCP segment including pseudo header as sequence of 16-bit integers
 	if (pseudo_seg == NULL) {
 		perror("memory allocation error ") ;
 		exit(EXIT_FAILURE) ;
 	}
-	phdr.length = htons(sizeof(struct tcphdr)) ;
-	memcpy(pseudo_seg, &phdr, sizeof(pseudo_header_t)) ;
-	memcpy(pseudo_seg + sizeof(pseudo_header_t), &tcph, sizeof(struct tcphdr)) ;
 
-	// Calculate checksum for tcp and ip
-	tcph.check = htons(checksum(pseudo_seg, sizeof(pseudo_seg))) ;
-	iph.check = htons(checksum(&iph, sizeof(struct iphdr))) ;
-	printf("tcp checksum : 0x%04X\n", ntohs(tcph.check)) ;
-	printf("ip checksum : 0x%04X\n", ntohs(iph.check)) ;
-	
-	// Create and fill syn packet
-	size_t packet_len = sizeof(struct iphdr) + sizeof(struct tcphdr) ;
-	char *syn_packet = malloc(packet_len) ;
-	if (syn_packet == NULL) {
+	packet = malloc(sizeof(struct iphdr) + sizeof(struct tcphdr)) ;
+	if (packet == NULL) {
 		perror("memory allocation error ") ;
 		exit(EXIT_FAILURE) ;
 	}
-	memcpy(syn_packet, &iph, sizeof(struct iphdr)) ;
-	memcpy(syn_packet + sizeof(struct iphdr), &tcph, sizeof(struct tcphdr)) ;
+
+	create_packet(pseudo_seg, packet, &iph, &tcph, &ph, NULL, 0) ; // SYN packet
 
 	// Send the syn packet
 	int sent = 0 ;
-	if (sent = sendto(sock, syn_packet, packet_len, 0, (struct sockaddr *)&daddr, sizeof(struct sockaddr)) == -1) {
+	if (sent = sendto(sock, packet, sizeof(struct iphdr) + sizeof(struct tcphdr), 0, (struct sockaddr *)&daddr, sizeof(struct sockaddr)) == -1) {
 		perror("SYN sendto failed ") ;
 		exit(EXIT_FAILURE) ;
 	} 
 	printf("SYN packet sent...\n") ;
 	
 	free (pseudo_seg) ;
-	free (syn_packet) ;
+	free (packet) ;
 	
 
 	// Step 2. Receive SYN-ACK
 	// Step 3. Send ACK 
+	
 
 	// Data transfer 
 	char message[BUF_SIZE];
