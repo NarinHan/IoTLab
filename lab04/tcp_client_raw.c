@@ -82,20 +82,21 @@ void create_TCP_header(struct tcphdr *tcph, int pkt_type, struct sockaddr_in *sr
 	tcph->dest = dst->sin_port ;
 	if (pkt_type == SYN) {
 		*seqnum = rand() % 16777215 ;
+		tcph->ack_seq = htonl(*acknum) ;
 		tcph->ack = 0 ;
 		tcph->psh = 0 ;
 		tcph->syn = 1 ;
 	} else if (pkt_type == ACK) {
+		tcph->ack_seq = htonl(*acknum + 1) ;
 		tcph->ack = 1 ;
 		tcph->psh = 0 ;
 		tcph->syn = 0 ;     
 	} else if (pkt_type == DATA) {
+		tcph->ack_seq = htonl(*acknum) ;
 		tcph->ack = 1 ;
 		tcph->psh = 1 ;
 		tcph->syn = 0 ;
 	}
-
-	tcph->ack_seq = htonl(*acknum) ;
 	tcph->seq = htonl(*seqnum) ;
 	tcph->doff = 5 ;
 	tcph->urg = 0 ;
