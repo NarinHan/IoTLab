@@ -6,10 +6,11 @@
 #include <time.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <netinet/if_ether.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 
-#define BUF_SIZE 1024
+#define BUF_SIZE 4096
 
 // Before run this code, execute the command below 
 // This is to install firewall so that OS does not take the packet
@@ -37,7 +38,6 @@ unsigned short checksum(const void *data, size_t len)
 {
 	unsigned long sum = 0 ;
 	unsigned short *buf = data ;
-	printf("len : %u\n", len) ;
 
 	// Sum all the 16-bit words
 	while (len > 1) {
@@ -82,24 +82,21 @@ void create_TCP_header(struct tcphdr *tcph, int pkt_type, struct sockaddr_in *sr
 	tcph->dest = dst->sin_port ;
 	if (pkt_type == SYN) {
 		*seqnum = rand() % 16777215 ;
-		tcph->seq = htonl(*seqnum) ;
-		tcph->ack_seq = htonl(0) ;
 		tcph->ack = 0 ;
 		tcph->psh = 0 ;
 		tcph->syn = 1 ;
 	} else if (pkt_type == ACK) {
-		tcph->seq = htonl(*seqnum + 1) ;
-		tcph->ack_seq = htonl(*acknum + 1) ;
 		tcph->ack = 1 ;
 		tcph->psh = 0 ;
 		tcph->syn = 0 ;     
 	} else if (pkt_type == DATA) {
-		tcph->seq = htonl(*seqnum + 1) ;
-		tcph->ack_seq = htonl(*acknum + 1) ;
 		tcph->ack = 1 ;
 		tcph->psh = 1 ;
 		tcph->syn = 0 ;
 	}
+
+	tcph->ack_seq = htonl(*acknum) ;
+	tcph->seq = htonl(*seqnum) ;
 	tcph->doff = 5 ;
 	tcph->urg = 0 ;
 	tcph->rst = 0 ;
@@ -128,6 +125,33 @@ void create_packet(char *pseudo_seg, char *packet, struct iphdr *iph, struct tcp
 	memcpy(packet, iph, sizeof(struct iphdr)) ;
 	memcpy(packet + sizeof(struct iphdr), tcph, sizeof(struct tcphdr)) ;
 	memcpy(packet + sizeof(struct iphdr) + sizeof(struct tcphdr), data, data_len) ;
+}
+
+int read_synack(const char * buffer, uint32_t *seqnum, uint32_t *acknum)
+{
+	// ACKnum(received) == Seq(sent) + 1
+	// Seq(received) + 1 == ACKnum(will send)
+	
+	// if (recv_bytes = recvfrom(sock, buffer, BUF_SIZE, 0, (struct sockaddr *)&daddr, &addr_len) == -1) {
+	// 	perror("SYNACK recvfrom failed ") ;
+	// 	exit(EXIT_FAILURE) ;
+	// }
+
+	struct iphdr iph ;
+	struct tcphdr tcph ;
+
+	memcpy(&iph, buffer, sizeof(struct iphdr)) ;
+	memcpy(&tcph, buffer + (iph.ihl * 4), sizeof(struct tcphdr)) ;
+
+	// Q. Do I have to check the protocol or the SYN/ACK bit on?
+
+	*seqnum = ntohl(tcph.ack_seq) ;
+	*acknum = ntohl(tcph.seq) ;	
+
+	printf("seqnum received: %u\n", ntohl(tcph.seq)) ;
+	printf("acknum received: %u\n", ntohl(tcph.ack_seq)) ;
+
+	return 0 ;
 }
 
 int main(int argc, char *argv[])
@@ -213,21 +237,52 @@ int main(int argc, char *argv[])
 
 	create_packet(pseudo_seg, packet, &iph, &tcph, &ph, NULL, 0) ; // SYN packet
 
-	// Send the syn packet
-	int sent = 0 ;
-	if (sent = sendto(sock, packet, sizeof(struct iphdr) + sizeof(struct tcphdr), 0, (struct sockaddr *)&daddr, sizeof(struct sockaddr)) == -1) {
+	// Send SYN packet
+	int sent_bytes = 0 ;
+	if (sent_bytes = sendto(sock, packet, sizeof(struct iphdr) + sizeof(struct tcphdr), 0, (struct sockaddr *)&daddr, sizeof(struct sockaddr)) == -1) {
 		perror("SYN sendto failed ") ;
 		exit(EXIT_FAILURE) ;
 	} 
-	printf("SYN packet sent...\n") ;
+	printf("...SYN packet succesfully sent...\n") ;
+	 
+	// Step 2. Receive SYN-ACK
+	char buffer[BUF_SIZE] ;
+	int recv_bytes = 0 ;
+	while (1) {
+		if ((recv_bytes = recv(sock, buffer, BUF_SIZE, 0)) == -1) {
+			perror("SYN-ACK receving error ") ;
+			exit(EXIT_FAILURE) ;
+		}
+		uint16_t temp ; 
+		memcpy(&temp, buffer + 22, sizeof(uint16_t)) ;
+		if (saddr.sin_port == temp) { // raw socket receives literally every packet
+			break ;
+		} 
+	}
 	
+	if (read_synack(buffer, &seqn, &ackn) == -1) {
+		perror("SYNACK received is not correct ") ;
+		exit(EXIT_FAILURE) ;
+	}
+
+	// Step 3. Send ACK 
+	create_IP_header(&iph, ACK, 0, &saddr, &daddr) ;
+	create_TCP_header(&tcph, ACK, &saddr, &daddr, &seqn, &ackn) ;
+	
+	memset(pseudo_seg, 0, sizeof(pseudo_header_t) + sizeof(struct tcphdr)) ;
+	memset(packet, 0, sizeof(struct iphdr) + sizeof(struct tcphdr)) ;
+
+	create_packet(pseudo_seg, packet, &iph, &tcph, &ph, NULL, 0) ; // ACK packet
+
+	// Send ACK packet
+	if (sent_bytes = sendto(sock, packet, sizeof(struct iphdr) + sizeof(struct tcphdr), 0, (struct sockaddr *)&daddr, sizeof(struct sockaddr)) == -1) {
+		perror("ACK sendto failed ") ;
+		exit(EXIT_FAILURE) ;
+	}
+	printf("...ACK packet succesfully sent...\n") ;
+
 	free (pseudo_seg) ;
 	free (packet) ;
-	
-
-	// Step 2. Receive SYN-ACK
-	// Step 3. Send ACK 
-	
 
 	// Data transfer 
 	char message[BUF_SIZE];
@@ -240,8 +295,61 @@ int main(int argc, char *argv[])
 			break;
 
 		// Step 4. Send an application message (with PSH and ACK flag)! 
+		size_t msg_len = strlen(message) ;
+		create_IP_header(&iph, DATA, msg_len, &saddr, &daddr) ;
+		create_TCP_header(&tcph, DATA, &saddr, &daddr, &seqn, &ackn) ;
+
+		pseudo_seg = malloc(sizeof(pseudo_header_t) + sizeof(struct tcphdr) + msg_len) ;
+		if (pseudo_seg == NULL) {
+			perror("memory allocation error ") ;
+			exit(EXIT_FAILURE) ;
+		}
+
+		packet = malloc(sizeof(struct iphdr) + sizeof(struct tcphdr) + msg_len) ;
+		if (packet == NULL) {
+			perror("memory allocation error ") ;
+			exit(EXIT_FAILURE) ;
+		}
+
+		create_packet(pseudo_seg, packet, &iph, &tcph, &ph, message, msg_len) ;
+
+		// Send DATA packet
+		if (sent_bytes = sendto(sock, packet, sizeof(struct iphdr) + sizeof(struct tcphdr) + msg_len, 0, (struct sockaddr *)&daddr, sizeof(struct sockaddr)) == -1) {
+			perror("DATA sendto failed ") ;
+			exit(EXIT_FAILURE) ;
+		}
+		printf("...DATA packet succesfully sent...\n") ;
+
+		free (pseudo_seg) ;
+		free (packet) ;
+
+		// Step 5. Receive ACK
+		memset(buffer, 0, BUF_SIZE) ;
+		while (1) {
+			if ((recv_bytes = recv(sock, buffer, BUF_SIZE, 0)) == -1) {
+				perror("ACK receving error ") ;
+				exit(EXIT_FAILURE) ;
+			}
+			uint16_t temp ;
+			memcpy(&temp, buffer + 22, sizeof(uint16_t)) ;
+			if (saddr.sin_port == temp) {
+				break ;
+			} 
+		}
 		
-		// Step 5. Receive ACK 
+		printf("Received ACK buffer:\n");
+		for (size_t i = 0; i < sizeof(struct iphdr) + sizeof(struct tcphdr); i++) {
+			printf("%02X ", (unsigned char)buffer[i]);
+			if ((i + 1) % 16 == 0) {
+				printf("\n");
+			}
+		}
+		printf("\n");
+			
+		if (read_synack(buffer, &seqn, &ackn) == -1) {
+			perror("SYNACK received is not correct ") ;
+			exit(EXIT_FAILURE) ;
+		} 
 	}
 
 	close(sock);
