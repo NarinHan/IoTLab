@@ -146,7 +146,7 @@ int read_synack(const char * buffer, uint32_t *seqnum, uint32_t *acknum)
 
 	// Q. Do I have to check the protocol or the SYN/ACK bit on?
 
-	*seqnum = ntohl(tcph.ack_seq) ;
+	*seqnum = ntohl(tcph.ack_seq) ; // ACKnum(received) == Seq(sent) + 1
 	*acknum = ntohl(tcph.seq) ;	
 
 	printf("seqnum received: %u\n", ntohl(tcph.seq)) ;
