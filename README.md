@@ -1,5 +1,8 @@
-# IoT Lab
+# IoT Laboratories
 ## 2024-1 @HGU
+
+### Course Introduction
+- [Course Introduction.pdf](https://github.com/NarinHan/IoTLab/files/14985382/Course.Introduction.pdf)
 
 ### Class Attributes
 - Time: TUE PM 4:00-6:45 & FRI PM 4:00-5:15
