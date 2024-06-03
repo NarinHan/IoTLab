@@ -1,0 +1,6 @@
+[submodule "lab07/lab07/wsServer"]
+	path = lab07/lab07/wsServer
+	url = https://github.com/Theldus/wsServer
+[submodule "lab07/wsServ"]
+	path = lab07/wsServ
+	url = https://github.com/Theldus/wsServer
